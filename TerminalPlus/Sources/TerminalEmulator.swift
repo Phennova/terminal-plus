@@ -17,10 +17,10 @@ class TerminalEmulator: ObservableObject {
     @Published var cursorY: Int = 0
     @Published var cursorVisible: Bool = true
     @Published var colorScheme: TerminalColorScheme = .dark
+    @Published var scrollbackBuffer: [[TerminalCell]] = []
 
     private var rows: Int = 24
     private var cols: Int = 80
-    private var scrollbackBuffer: [[TerminalCell]] = []
     private var maxScrollback: Int = 10000
 
     // Current text attributes
@@ -60,9 +60,37 @@ class TerminalEmulator: ObservableObject {
     func resize(rows: Int, cols: Int) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
+
+            // Don't resize if dimensions haven't changed
+            guard rows != self.rows || cols != self.cols else { return }
+
+            // Save old buffer content
+            let oldBuffer = self.buffer
+            let oldRows = self.rows
+            let oldCols = self.cols
+
+            // Update dimensions
             self.rows = rows
             self.cols = cols
-            self.initializeBuffer()
+
+            // Create new buffer with new dimensions
+            var newBuffer = Array(repeating: Array(repeating: TerminalCell(character: " "), count: cols), count: rows)
+
+            // Copy old content to new buffer (preserve as much as possible)
+            for (rowIndex, row) in oldBuffer.enumerated() {
+                guard rowIndex < rows else { break }
+                for (colIndex, cell) in row.enumerated() {
+                    guard colIndex < cols else { break }
+                    newBuffer[rowIndex][colIndex] = cell
+                }
+            }
+
+            // Update buffer
+            self.buffer = newBuffer
+
+            // Adjust cursor position if needed
+            self.cursorX = min(self.cursorX, cols - 1)
+            self.cursorY = min(self.cursorY, rows - 1)
         }
     }
 

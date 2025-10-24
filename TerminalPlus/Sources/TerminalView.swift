@@ -2,15 +2,14 @@ import SwiftUI
 import AppKit
 
 struct TerminalView: View {
-    let paneId: UUID
-    @StateObject private var terminalEmulator = TerminalEmulator()
-    @StateObject private var ptyController = PTYController()
-    @StateObject private var previewManager = PreviewManager()
+    @ObservedObject var tabSession: TabSession
+    let viewSize: CGSize
     @EnvironmentObject var gitIntegration: GitIntegration
     @EnvironmentObject var containerDetector: ContainerDetector
     @EnvironmentObject var timeTravelDebugger: TimeTravelDebugger
     @AppStorage("fontSize") private var fontSize = 14.0
     @State private var hoveredPath: String?
+    @State private var hasStarted = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -21,41 +20,38 @@ struct TerminalView: View {
                      containerName: containerDetector.containerName)
 
             // Terminal content with proper scrolling
-            GeometryReader { geometry in
-                TerminalContentView(
-                    terminalEmulator: terminalEmulator,
-                    ptyController: ptyController,
-                    fontSize: fontSize,
-                    viewSize: geometry.size
-                )
-            }
-            .background(Color(nsColor: terminalEmulator.colorScheme.background))
+            TerminalContentView(
+                terminalEmulator: tabSession.terminalEmulator,
+                ptyController: tabSession.ptyController,
+                fontSize: fontSize,
+                viewSize: viewSize
+            )
+            .background(Color(nsColor: tabSession.terminalEmulator.colorScheme.background))
 
             // Preview overlay
-            if let path = hoveredPath, let preview = previewManager.getPreview(for: path) {
+            if let path = hoveredPath, let preview = tabSession.previewManager.getPreview(for: path) {
                 PreviewOverlay(preview: preview)
                     .transition(.opacity)
             }
         }
         .onAppear {
-            ptyController.start()
-            ptyController.onOutput = { data in
-                terminalEmulator.processOutput(data)
-                timeTravelDebugger.recordOutput(data)
-            }
-            terminalEmulator.onInput = { text in
-                ptyController.write(text)
-                if let data = text.data(using: .utf8) {
-                    timeTravelDebugger.recordInput(data)
+            // Only start once
+            if !hasStarted {
+                hasStarted = true
+                // Connect to time travel debugger
+                tabSession.ptyController.onOutput = { [weak tabSession] data in
+                    tabSession?.terminalEmulator.processOutput(data)
+                    timeTravelDebugger.recordOutput(data)
                 }
+                tabSession.terminalEmulator.onInput = { [weak tabSession] text in
+                    tabSession?.ptyController.write(text)
+                    if let data = text.data(using: .utf8) {
+                        timeTravelDebugger.recordInput(data)
+                    }
+                }
+                gitIntegration.startMonitoring(directory: tabSession.ptyController.currentDirectory)
+                containerDetector.startDetection()
             }
-            gitIntegration.startMonitoring(directory: ptyController.currentDirectory)
-            containerDetector.startDetection()
-        }
-        .onDisappear {
-            ptyController.stop()
-            gitIntegration.stopMonitoring()
-            containerDetector.stopDetection()
         }
     }
 }
@@ -168,16 +164,17 @@ class TerminalNSView: NSView {
     func updateSize() {
         guard let emulator = terminalEmulator else { return }
 
-        // Calculate required height based on buffer
-        let contentHeight = CGFloat(emulator.buffer.count) * lineHeight
+        // Calculate required height based on scrollback + buffer
+        let totalLines = emulator.scrollbackBuffer.count + emulator.buffer.count
+        let contentHeight = CGFloat(totalLines) * lineHeight
         let minHeight = max(contentHeight, 600)
 
-        // Update frame size
+        // Update frame size to include all content (scrollback + visible buffer)
         frame = NSRect(x: 0, y: 0, width: viewWidth, height: minHeight)
 
-        // Only notify PTY if size actually changed
+        // Only notify PTY if size actually changed (PTY only cares about visible rows)
         let cols = columns
-        let rows = max(24, Int(minHeight / lineHeight))
+        let rows = max(24, emulator.buffer.count)
 
         if cols != lastCols || rows != lastRows {
             lastCols = cols
@@ -209,9 +206,17 @@ class TerminalNSView: NSView {
 
         let font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
 
-        // Draw terminal content (now with flipped coordinates, top to bottom is natural)
-        for (lineIndex, line) in terminalEmulator.buffer.enumerated() {
-            let yPosition = CGFloat(lineIndex) * lineHeight
+        var currentLineIndex = 0
+
+        // Draw scrollback buffer first
+        for (scrollbackIndex, line) in terminalEmulator.scrollbackBuffer.enumerated() {
+            let yPosition = CGFloat(currentLineIndex) * lineHeight
+
+            // Skip lines outside dirtyRect for performance
+            if yPosition + lineHeight < dirtyRect.minY || yPosition > dirtyRect.maxY {
+                currentLineIndex += 1
+                continue
+            }
 
             for (colIndex, cell) in line.enumerated() {
                 let xPosition = CGFloat(colIndex) * charWidth
@@ -234,18 +239,54 @@ class TerminalNSView: NSView {
                     attributedString.draw(at: NSPoint(x: xPosition, y: yPosition))
                 }
             }
+            currentLineIndex += 1
         }
 
-        // Draw cursor
-        if terminalEmulator.cursorVisible && cursorBlink {
-            let cursorX = CGFloat(terminalEmulator.cursorX) * charWidth
-            let cursorY = CGFloat(terminalEmulator.cursorY) * lineHeight
-            let cursorRect = NSRect(x: cursorX, y: cursorY, width: charWidth, height: lineHeight)
+        // Draw current buffer
+        for (bufferIndex, line) in terminalEmulator.buffer.enumerated() {
+            let yPosition = CGFloat(currentLineIndex) * lineHeight
 
-            context.setFillColor(terminalEmulator.colorScheme.cursor.cgColor)
-            context.setAlpha(0.7)
-            context.fill(cursorRect)
-            context.setAlpha(1.0)
+            // Skip lines outside dirtyRect for performance
+            if yPosition + lineHeight < dirtyRect.minY || yPosition > dirtyRect.maxY {
+                currentLineIndex += 1
+                continue
+            }
+
+            for (colIndex, cell) in line.enumerated() {
+                let xPosition = CGFloat(colIndex) * charWidth
+                let rect = NSRect(x: xPosition, y: yPosition, width: charWidth, height: lineHeight)
+
+                // Draw cell background
+                if let bgColor = cell.backgroundColor {
+                    context.setFillColor(bgColor.cgColor)
+                    context.fill(rect)
+                }
+
+                // Draw character (skip spaces for performance)
+                if cell.character != " " {
+                    let attributes: [NSAttributedString.Key: Any] = [
+                        .font: font,
+                        .foregroundColor: cell.foregroundColor ?? terminalEmulator.colorScheme.foreground
+                    ]
+
+                    let attributedString = NSAttributedString(string: String(cell.character), attributes: attributes)
+                    attributedString.draw(at: NSPoint(x: xPosition, y: yPosition))
+                }
+            }
+
+            // Draw cursor on current buffer line
+            if terminalEmulator.cursorVisible && cursorBlink && bufferIndex == terminalEmulator.cursorY {
+                let cursorX = CGFloat(terminalEmulator.cursorX) * charWidth
+                let cursorY = yPosition
+                let cursorRect = NSRect(x: cursorX, y: cursorY, width: charWidth, height: lineHeight)
+
+                context.setFillColor(terminalEmulator.colorScheme.cursor.cgColor)
+                context.setAlpha(0.7)
+                context.fill(cursorRect)
+                context.setAlpha(1.0)
+            }
+
+            currentLineIndex += 1
         }
     }
 

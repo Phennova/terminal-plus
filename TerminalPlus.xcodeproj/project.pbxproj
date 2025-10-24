@@ -24,6 +24,7 @@
 		A10000001ABC000000000029 /* ContainerDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000001ABC000000000030 /* ContainerDetector.swift */; };
 		A10000001ABC000000000031 /* EnvironmentManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000001ABC000000000032 /* EnvironmentManager.swift */; };
 		A10000001ABC000000000033 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A10000001ABC000000000034 /* Assets.xcassets */; };
+		A10000001ABC000000000055 /* TabManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000001ABC000000000056 /* TabManager.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -47,6 +48,7 @@
 		A10000001ABC000000000034 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A10000001ABC000000000036 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A10000001ABC000000000037 /* TerminalPlus.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = TerminalPlus.entitlements; sourceTree = "<group>"; };
+		A10000001ABC000000000056 /* TabManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabManager.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -96,6 +98,7 @@
 				A10000001ABC000000000008 /* PTYController.swift */,
 				A10000001ABC000000000010 /* TerminalEmulator.swift */,
 				A10000001ABC000000000012 /* ColorScheme.swift */,
+				A10000001ABC000000000056 /* TabManager.swift */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
@@ -220,6 +223,7 @@
 				A10000001ABC000000000027 /* PackageManagerUI.swift in Sources */,
 				A10000001ABC000000000029 /* ContainerDetector.swift in Sources */,
 				A10000001ABC000000000031 /* EnvironmentManager.swift in Sources */,
+				A10000001ABC000000000055 /* TabManager.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

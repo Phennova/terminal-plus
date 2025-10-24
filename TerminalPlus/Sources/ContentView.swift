@@ -6,10 +6,9 @@ struct ContentView: View {
     @EnvironmentObject var packageManager: PackageManagerUI
     @EnvironmentObject var environmentManager: EnvironmentManager
     @EnvironmentObject var timeTravelDebugger: TimeTravelDebugger
+    @StateObject private var tabManager = TabManager()
     @State private var showCommandPalette = false
     @State private var showHelp = false
-    @State private var selectedTab = 0
-    @State private var tabs: [TerminalTab] = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -24,15 +23,25 @@ struct ContentView: View {
             )
 
             // Tab Bar
-            TabBar(tabs: $tabs, selectedTab: $selectedTab)
+            TabBar(
+                tabs: tabManager.tabs.map { TabInfo(id: $0.id, title: $0.title) },
+                selectedTab: tabManager.selectedIndex,
+                onSelectTab: { index in tabManager.selectTab(at: index) },
+                onCloseTab: { index in tabManager.closeTab(at: index) },
+                onNewTab: { tabManager.addNewTab() }
+            )
 
             // Main content
             ZStack {
                 // Terminal view
                 GeometryReader { geometry in
-                    if tabs.indices.contains(selectedTab) {
-                        TerminalView(paneId: tabs[selectedTab].id)
-                            .frame(width: geometry.size.width, height: geometry.size.height)
+                    if let currentTab = tabManager.selectedTab {
+                        TerminalView(
+                            tabSession: currentTab,
+                            viewSize: geometry.size
+                        )
+                        .id(currentTab.id)
+                        .frame(width: geometry.size.width, height: geometry.size.height)
                     }
                 }
 
@@ -72,36 +81,28 @@ struct ContentView: View {
                 }
             }
         }
-        .onAppear {
-            if tabs.isEmpty {
-                addNewTab()
-            }
-        }
         .onReceive(NotificationCenter.default.publisher(for: .showCommandPalette)) { _ in
             withAnimation {
                 showCommandPalette.toggle()
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("NewTerminalTab"))) { _ in
-            addNewTab()
+            tabManager.addNewTab()
         }
-    }
-
-    private func addNewTab() {
-        let newTab = TerminalTab(title: "Terminal \(tabs.count + 1)")
-        tabs.append(newTab)
-        selectedTab = tabs.count - 1
     }
 }
 
-struct TerminalTab: Identifiable {
-    let id = UUID()
-    var title: String
+struct TabInfo: Identifiable {
+    let id: UUID
+    let title: String
 }
 
 struct TabBar: View {
-    @Binding var tabs: [TerminalTab]
-    @Binding var selectedTab: Int
+    let tabs: [TabInfo]
+    let selectedTab: Int
+    let onSelectTab: (Int) -> Void
+    let onCloseTab: (Int) -> Void
+    let onNewTab: () -> Void
 
     var body: some View {
         HStack(spacing: 0) {
@@ -110,22 +111,17 @@ struct TabBar: View {
                     title: tab.title,
                     isSelected: index == selectedTab,
                     onSelect: {
-                        selectedTab = index
+                        onSelectTab(index)
                     },
                     onClose: {
                         if tabs.count > 1 {
-                            tabs.remove(at: index)
-                            if selectedTab >= tabs.count {
-                                selectedTab = tabs.count - 1
-                            }
+                            onCloseTab(index)
                         }
                     }
                 )
             }
 
-            Button(action: {
-                NotificationCenter.default.post(name: NSNotification.Name("NewTerminalTab"), object: nil)
-            }) {
+            Button(action: onNewTab) {
                 Image(systemName: "plus")
                     .font(.system(size: 12))
                     .foregroundColor(.white)
