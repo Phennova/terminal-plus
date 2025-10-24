@@ -2,7 +2,7 @@ import Foundation
 import SwiftUI
 
 struct BrewPackage: Identifiable, Codable {
-    let id = UUID()
+    var id = UUID()
     let name: String
     let version: String
     let description: String

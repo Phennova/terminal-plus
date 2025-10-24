@@ -229,7 +229,7 @@ class TerminalNSView: NSView {
         guard let characters = event.characters else { return }
 
         // Handle special keys
-        if event.modifiers.contains(.command) {
+        if event.modifierFlags.contains(.command) {
             super.keyDown(with: event)
             return
         }

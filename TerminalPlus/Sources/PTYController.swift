@@ -42,7 +42,7 @@ class PTYController: ObservableObject {
             return
         }
 
-        let slavePath = String(cString: nameBuf)
+        _ = String(cString: nameBuf)  // slavePath - keeping for future use
 
         // Prepare file actions for posix_spawn
         var fileActions: posix_spawn_file_actions_t?
@@ -74,7 +74,7 @@ class PTYController: ObservableObject {
 
         // Get user's shell
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
-        let shellName = (shell as NSString).lastPathComponent
+        _ = (shell as NSString).lastPathComponent  // shellName - keeping for future use
 
         // Setup environment
         var env = [

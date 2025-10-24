@@ -275,7 +275,7 @@ struct ShortcutRow: View {
     var body: some View {
         HStack {
             Text(key)
-                .font(.system(size: 11, design: .monospaced, weight: .medium))
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
                 .foregroundColor(.white)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
