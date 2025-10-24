@@ -52,9 +52,11 @@ struct TerminalView: View {
                 terminalEmulator.processOutput(data)
                 timeTravelDebugger.recordOutput(data)
             }
-            terminalEmulator.onInput = { data in
-                ptyController.write(data)
-                timeTravelDebugger.recordInput(data)
+            terminalEmulator.onInput = { text in
+                ptyController.write(text)
+                if let data = text.data(using: .utf8) {
+                    timeTravelDebugger.recordInput(data)
+                }
             }
             gitIntegration.startMonitoring(directory: ptyController.currentDirectory)
             containerDetector.startDetection()
@@ -134,7 +136,7 @@ class TerminalNSView: NSView {
 
                 // Draw background
                 if let bgColor = cell.backgroundColor {
-                    context?.setFillColor(bgColor)
+                    context?.setFillColor(bgColor.cgColor)
                     context?.fill(rect)
                 }
 
