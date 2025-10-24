@@ -24,58 +24,107 @@ class PTYController: ObservableObject {
         self.slaveFD = slaveFD
 
         // Set non-blocking mode
-        var flags = fcntl(masterFD, F_GETFL, 0)
-        flags |= O_NONBLOCK
-        fcntl(masterFD, F_SETFL, flags)
-
-        // Fork process
-        let pid = fork()
-
-        if pid == -1 {
-            print("Failed to fork: \(String(cString: strerror(errno)))")
+        let flags = fcntl(masterFD, F_GETFL, 0)
+        if flags == -1 {
+            print("Failed to get flags: \(String(cString: strerror(errno)))")
             return
-        } else if pid == 0 {
-            // Child process
-            close(masterFD)
-
-            // Create new session
-            setsid()
-
-            // Set slave as controlling terminal
-            if ioctl(slaveFD, TIOCSCTTY, nil) == -1 {
-                exit(1)
-            }
-
-            // Redirect stdin, stdout, stderr to slave
-            dup2(slaveFD, STDIN_FILENO)
-            dup2(slaveFD, STDOUT_FILENO)
-            dup2(slaveFD, STDERR_FILENO)
-
-            // Close original slave FD
-            if slaveFD > STDERR_FILENO {
-                close(slaveFD)
-            }
-
-            // Set environment variables
-            setenv("TERM", "xterm-256color", 1)
-            setenv("COLORTERM", "truecolor", 1)
-            setenv("TERM_PROGRAM", "TerminalPlus", 1)
-
-            // Get user's shell
-            let shell = getenv("SHELL").flatMap { String(cString: $0) } ?? "/bin/zsh"
-            let shellName = (shell as NSString).lastPathComponent
-
-            // Execute shell
-            execl(shell, shellName, "-l", nil)
-            exit(1)
-        } else {
-            // Parent process
-            close(slaveFD)
-            childPID = pid
-
-            // Setup read source for output
-            setupReadSource()
         }
+
+        if fcntl(masterFD, F_SETFL, flags | O_NONBLOCK) == -1 {
+            print("Failed to set non-blocking: \(String(cString: strerror(errno)))")
+            return
+        }
+
+        // Get slave path
+        var nameBuf = [CChar](repeating: 0, count: 1024)
+        if ttyname_r(slaveFD, &nameBuf, nameBuf.count) != 0 {
+            print("Failed to get slave name")
+            return
+        }
+
+        let slavePath = String(cString: nameBuf)
+
+        // Prepare file actions for posix_spawn
+        var fileActions: posix_spawn_file_actions_t?
+        posix_spawn_file_actions_init(&fileActions)
+
+        // Setup stdin, stdout, stderr to use slave
+        posix_spawn_file_actions_adddup2(&fileActions, slaveFD, STDIN_FILENO)
+        posix_spawn_file_actions_adddup2(&fileActions, slaveFD, STDOUT_FILENO)
+        posix_spawn_file_actions_adddup2(&fileActions, slaveFD, STDERR_FILENO)
+
+        // Close the slave in child after dup2
+        if slaveFD > STDERR_FILENO {
+            posix_spawn_file_actions_addclose(&fileActions, slaveFD)
+        }
+
+        // Close master in child
+        posix_spawn_file_actions_addclose(&fileActions, masterFD)
+
+        // Setup spawn attributes
+        var spawnAttrs: posix_spawnattr_t?
+        posix_spawnattr_init(&spawnAttrs)
+
+        // Set flags for process group
+        var flags: Int16 = 0
+        #if os(macOS)
+        flags = Int16(POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK)
+        #endif
+        posix_spawnattr_setflags(&spawnAttrs, flags)
+
+        // Get user's shell
+        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        let shellName = (shell as NSString).lastPathComponent
+
+        // Setup environment
+        var env = [
+            "TERM=xterm-256color",
+            "COLORTERM=truecolor",
+            "TERM_PROGRAM=TerminalPlus",
+            "PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin"
+        ]
+
+        // Add existing environment variables
+        for (key, value) in ProcessInfo.processInfo.environment {
+            if !["TERM", "COLORTERM", "TERM_PROGRAM"].contains(key) {
+                env.append("\(key)=\(value)")
+            }
+        }
+
+        let envp = env.map { $0.withCString(strdup) } + [nil]
+        defer { envp.forEach { free($0) } }
+
+        // Arguments for shell
+        let argv = [
+            strdup(shell),
+            strdup("-l"),
+            nil
+        ]
+        defer { argv.forEach { free($0) } }
+
+        // Spawn process
+        var pid: pid_t = 0
+        let result = posix_spawn(&pid, shell, &fileActions, &spawnAttrs, argv, envp)
+
+        // Cleanup
+        posix_spawn_file_actions_destroy(&fileActions)
+        posix_spawnattr_destroy(&spawnAttrs)
+
+        if result != 0 {
+            print("Failed to spawn shell: \(String(cString: strerror(result)))")
+            close(masterFD)
+            close(slaveFD)
+            return
+        }
+
+        // Close slave in parent
+        close(slaveFD)
+        self.slaveFD = -1
+
+        self.childPID = pid
+
+        // Setup read source for output
+        setupReadSource()
     }
 
     private func setupReadSource() {
@@ -106,7 +155,7 @@ class PTYController: ObservableObject {
 
     func write(_ data: String) {
         guard masterFD >= 0 else { return }
-        data.withCString { ptr in
+        _ = data.withCString { ptr in
             Darwin.write(masterFD, ptr, strlen(ptr))
         }
     }
@@ -120,7 +169,7 @@ class PTYController: ObservableObject {
         size.ws_xpixel = 0
         size.ws_ypixel = 0
 
-        ioctl(masterFD, TIOCSWINSZ, &size)
+        _ = ioctl(masterFD, TIOCSWINSZ, &size)
     }
 
     func stop() {
