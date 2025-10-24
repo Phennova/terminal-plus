@@ -66,11 +66,11 @@ class PTYController: ObservableObject {
         posix_spawnattr_init(&spawnAttrs)
 
         // Set flags for process group
-        var flags: Int16 = 0
+        var spawnFlags: Int16 = 0
         #if os(macOS)
-        flags = Int16(POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK)
+        spawnFlags = Int16(POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK)
         #endif
-        posix_spawnattr_setflags(&spawnAttrs, flags)
+        posix_spawnattr_setflags(&spawnAttrs, spawnFlags)
 
         // Get user's shell
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
