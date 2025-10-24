@@ -34,10 +34,27 @@ class TerminalEmulator: ObservableObject {
     private var escapeBuffer: String = ""
     private var inEscapeSequence: Bool = false
 
+    // Update batching
+    private var updateTimer: Timer?
+    private var needsRedraw: Bool = false
+
     var onInput: ((String) -> Void)?
 
     init() {
         initializeBuffer()
+        setupUpdateTimer()
+    }
+
+    private func setupUpdateTimer() {
+        // Batch updates to reduce frequency
+        updateTimer = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { [weak self] _ in
+            guard let self = self, self.needsRedraw else { return }
+            self.needsRedraw = false
+            // Trigger view update on main thread asynchronously
+            DispatchQueue.main.async {
+                self.objectWillChange.send()
+            }
+        }
     }
 
     private func initializeBuffer() {
@@ -47,28 +64,36 @@ class TerminalEmulator: ObservableObject {
     func resize(rows: Int, cols: Int) {
         self.rows = rows
         self.cols = cols
-        initializeBuffer()
+        DispatchQueue.main.async { [weak self] in
+            self?.initializeBuffer()
+        }
     }
 
     func processOutput(_ data: Data) {
         guard let string = String(data: data, encoding: .utf8) else { return }
 
-        for char in string {
-            if inEscapeSequence {
-                escapeBuffer.append(char)
-                if processEscapeSequence() {
-                    inEscapeSequence = false
-                    escapeBuffer = ""
-                }
-            } else if char == "\u{1B}" { // ESC character
-                inEscapeSequence = true
-                escapeBuffer = "\u{1B}"
-            } else {
-                processCharacter(char)
-            }
-        }
+        // Process data on background queue
+        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
+            guard let self = self else { return }
 
-        objectWillChange.send()
+            for char in string {
+                if self.inEscapeSequence {
+                    self.escapeBuffer.append(char)
+                    if self.processEscapeSequence() {
+                        self.inEscapeSequence = false
+                        self.escapeBuffer = ""
+                    }
+                } else if char == "\u{1B}" { // ESC character
+                    self.inEscapeSequence = true
+                    self.escapeBuffer = "\u{1B}"
+                } else {
+                    self.processCharacter(char)
+                }
+            }
+
+            // Mark that we need a redraw (timer will handle the actual update)
+            self.needsRedraw = true
+        }
     }
 
     private func processCharacter(_ char: Character) {
@@ -100,14 +125,16 @@ class TerminalEmulator: ObservableObject {
                 }
             }
 
-            buffer[cursorY][cursorX] = TerminalCell(
-                character: char,
-                foregroundColor: currentForeground,
-                backgroundColor: currentBackground,
-                bold: currentBold,
-                italic: currentItalic,
-                underline: currentUnderline
-            )
+            if cursorY < buffer.count && cursorX < buffer[cursorY].count {
+                buffer[cursorY][cursorX] = TerminalCell(
+                    character: char,
+                    foregroundColor: currentForeground,
+                    backgroundColor: currentBackground,
+                    bold: currentBold,
+                    italic: currentItalic,
+                    underline: currentUnderline
+                )
+            }
             cursorX += 1
         }
     }
@@ -262,26 +289,36 @@ class TerminalEmulator: ObservableObject {
         switch mode {
         case 0: // Erase from cursor to end
             for x in cursorX..<cols {
-                buffer[cursorY][x] = emptyCell
+                if cursorY < buffer.count && x < buffer[cursorY].count {
+                    buffer[cursorY][x] = emptyCell
+                }
             }
             for y in (cursorY + 1)..<rows {
                 for x in 0..<cols {
-                    buffer[y][x] = emptyCell
+                    if y < buffer.count && x < buffer[y].count {
+                        buffer[y][x] = emptyCell
+                    }
                 }
             }
 
         case 1: // Erase from cursor to beginning
             for y in 0..<cursorY {
                 for x in 0..<cols {
-                    buffer[y][x] = emptyCell
+                    if y < buffer.count && x < buffer[y].count {
+                        buffer[y][x] = emptyCell
+                    }
                 }
             }
             for x in 0...cursorX {
-                buffer[cursorY][x] = emptyCell
+                if cursorY < buffer.count && x < buffer[cursorY].count {
+                    buffer[cursorY][x] = emptyCell
+                }
             }
 
         case 2, 3: // Erase entire display
-            initializeBuffer()
+            DispatchQueue.main.async { [weak self] in
+                self?.initializeBuffer()
+            }
 
         default:
             break
@@ -291,20 +328,28 @@ class TerminalEmulator: ObservableObject {
     private func eraseLine(mode: Int) {
         let emptyCell = TerminalCell(character: " ")
 
+        guard cursorY < buffer.count else { return }
+
         switch mode {
         case 0: // Erase from cursor to end of line
             for x in cursorX..<cols {
-                buffer[cursorY][x] = emptyCell
+                if x < buffer[cursorY].count {
+                    buffer[cursorY][x] = emptyCell
+                }
             }
 
         case 1: // Erase from cursor to beginning of line
             for x in 0...cursorX {
-                buffer[cursorY][x] = emptyCell
+                if x < buffer[cursorY].count {
+                    buffer[cursorY][x] = emptyCell
+                }
             }
 
         case 2: // Erase entire line
             for x in 0..<cols {
-                buffer[cursorY][x] = emptyCell
+                if x < buffer[cursorY].count {
+                    buffer[cursorY][x] = emptyCell
+                }
             }
 
         default:
@@ -314,14 +359,16 @@ class TerminalEmulator: ObservableObject {
 
     private func scrollUp() {
         // Move first line to scrollback
-        scrollbackBuffer.append(buffer[0])
-        if scrollbackBuffer.count > maxScrollback {
-            scrollbackBuffer.removeFirst()
-        }
+        if buffer.count > 0 {
+            scrollbackBuffer.append(buffer[0])
+            if scrollbackBuffer.count > maxScrollback {
+                scrollbackBuffer.removeFirst()
+            }
 
-        // Shift all lines up
-        buffer.remove(at: 0)
-        buffer.append(Array(repeating: TerminalCell(character: " "), count: cols))
+            // Shift all lines up
+            buffer.remove(at: 0)
+            buffer.append(Array(repeating: TerminalCell(character: " "), count: cols))
+        }
     }
 
     func handleInput(_ input: String) {
@@ -330,5 +377,9 @@ class TerminalEmulator: ObservableObject {
 
     func updateSelection(with gesture: DragGesture.Value) {
         // Implement text selection logic
+    }
+
+    deinit {
+        updateTimer?.invalidate()
     }
 }

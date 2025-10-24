@@ -97,10 +97,19 @@ struct TerminalContentView: NSViewRepresentable {
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let terminalView = scrollView.documentView as? TerminalNSView else { return }
-        terminalView.fontSize = CGFloat(fontSize)
-        terminalView.viewWidth = viewSize.width
-        terminalView.updateSize()
-        terminalView.needsDisplay = true
+
+        let newFontSize = CGFloat(fontSize)
+        let newWidth = viewSize.width
+
+        // Only update if values actually changed
+        let sizeChanged = abs(terminalView.fontSize - newFontSize) > 0.01 ||
+                         abs(terminalView.viewWidth - newWidth) > 1.0
+
+        if sizeChanged {
+            terminalView.fontSize = newFontSize
+            terminalView.viewWidth = newWidth
+            terminalView.updateSize()
+        }
     }
 }
 
@@ -112,6 +121,8 @@ class TerminalNSView: NSView {
     var shouldAutoScroll = true
     private var cursorTimer: Timer?
     private var cursorBlink = true
+    private var lastCols: Int = 0
+    private var lastRows: Int = 0
 
     private var charWidth: CGFloat {
         fontSize * 0.6
@@ -161,11 +172,19 @@ class TerminalNSView: NSView {
         // Update frame size
         frame = NSRect(x: 0, y: 0, width: viewWidth, height: minHeight)
 
-        // Notify PTY of size change
+        // Only notify PTY if size actually changed
         let cols = columns
         let rows = max(24, Int(minHeight / lineHeight))
-        ptyController?.resize(width: cols, height: rows)
-        emulator.resize(rows: rows, cols: cols)
+
+        if cols != lastCols || rows != lastRows {
+            lastCols = cols
+            lastRows = rows
+            ptyController?.resize(width: cols, height: rows)
+            emulator.resize(rows: rows, cols: cols)
+        }
+
+        // Request redraw
+        needsDisplay = true
     }
 
     func scrollToBottom() {
