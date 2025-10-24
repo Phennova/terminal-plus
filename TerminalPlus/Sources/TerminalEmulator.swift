@@ -34,9 +34,10 @@ class TerminalEmulator: ObservableObject {
     private var escapeBuffer: String = ""
     private var inEscapeSequence: Bool = false
 
-    // Update batching
+    // Thread safety
+    private let processingQueue = DispatchQueue(label: "com.terminalplus.emulator", qos: .userInteractive)
+    private var pendingData: Data = Data()
     private var updateTimer: Timer?
-    private var needsRedraw: Bool = false
 
     var onInput: ((String) -> Void)?
 
@@ -46,14 +47,9 @@ class TerminalEmulator: ObservableObject {
     }
 
     private func setupUpdateTimer() {
-        // Batch updates to reduce frequency
+        // Process pending data at 60fps
         updateTimer = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { [weak self] _ in
-            guard let self = self, self.needsRedraw else { return }
-            self.needsRedraw = false
-            // Trigger view update on main thread asynchronously
-            DispatchQueue.main.async {
-                self.objectWillChange.send()
-            }
+            self?.processPendingData()
         }
     }
 
@@ -62,37 +58,50 @@ class TerminalEmulator: ObservableObject {
     }
 
     func resize(rows: Int, cols: Int) {
-        self.rows = rows
-        self.cols = cols
         DispatchQueue.main.async { [weak self] in
-            self?.initializeBuffer()
+            guard let self = self else { return }
+            self.rows = rows
+            self.cols = cols
+            self.initializeBuffer()
         }
     }
 
     func processOutput(_ data: Data) {
-        guard let string = String(data: data, encoding: .utf8) else { return }
-
-        // Process data on background queue
-        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
+        // Accumulate data to process in batches
+        processingQueue.async { [weak self] in
             guard let self = self else { return }
+            self.pendingData.append(data)
+        }
+    }
 
-            for char in string {
-                if self.inEscapeSequence {
-                    self.escapeBuffer.append(char)
-                    if self.processEscapeSequence() {
-                        self.inEscapeSequence = false
-                        self.escapeBuffer = ""
+    private func processPendingData() {
+        processingQueue.async { [weak self] in
+            guard let self = self else { return }
+            guard !self.pendingData.isEmpty else { return }
+
+            let dataToProcess = self.pendingData
+            self.pendingData = Data()
+
+            // Process on main thread to update @Published properties safely
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                guard let string = String(data: dataToProcess, encoding: .utf8) else { return }
+
+                for char in string {
+                    if self.inEscapeSequence {
+                        self.escapeBuffer.append(char)
+                        if self.processEscapeSequence() {
+                            self.inEscapeSequence = false
+                            self.escapeBuffer = ""
+                        }
+                    } else if char == "\u{1B}" { // ESC character
+                        self.inEscapeSequence = true
+                        self.escapeBuffer = "\u{1B}"
+                    } else {
+                        self.processCharacter(char)
                     }
-                } else if char == "\u{1B}" { // ESC character
-                    self.inEscapeSequence = true
-                    self.escapeBuffer = "\u{1B}"
-                } else {
-                    self.processCharacter(char)
                 }
             }
-
-            // Mark that we need a redraw (timer will handle the actual update)
-            self.needsRedraw = true
         }
     }
 
@@ -316,9 +325,7 @@ class TerminalEmulator: ObservableObject {
             }
 
         case 2, 3: // Erase entire display
-            DispatchQueue.main.async { [weak self] in
-                self?.initializeBuffer()
-            }
+            initializeBuffer()
 
         default:
             break

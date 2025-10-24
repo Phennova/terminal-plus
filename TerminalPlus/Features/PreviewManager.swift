@@ -13,6 +13,7 @@ struct FilePreview {
 class PreviewManager: ObservableObject {
     @Published var previews: [String: FilePreview] = [:]
     private let fileManager = FileManager.default
+    private let previewQueue = DispatchQueue(label: "com.terminalplus.previewmanager", qos: .userInitiated)
 
     func getPreview(for path: String) -> FilePreview? {
         // Return cached preview if available
@@ -20,66 +21,77 @@ class PreviewManager: ObservableObject {
             return cached
         }
 
-        // Expand path and check if file exists
-        let expandedPath = NSString(string: path).expandingTildeInPath
-        guard fileManager.fileExists(atPath: expandedPath) else { return nil }
+        // Generate preview asynchronously to avoid blocking
+        previewQueue.async { [weak self] in
+            guard let self = self else { return }
 
-        let url = URL(fileURLWithPath: expandedPath)
-        let fileName = url.lastPathComponent
+            // Expand path and check if file exists
+            let expandedPath = NSString(string: path).expandingTildeInPath
+            guard self.fileManager.fileExists(atPath: expandedPath) else { return }
 
-        // Determine file type
-        guard let fileType = try? url.resourceValues(forKeys: [.contentTypeKey]).contentType else {
-            return nil
-        }
+            let url = URL(fileURLWithPath: expandedPath)
+            let fileName = url.lastPathComponent
 
-        var preview: FilePreview?
+            // Determine file type
+            guard let fileType = try? url.resourceValues(forKeys: [.contentTypeKey]).contentType else {
+                return
+            }
 
-        // Handle images
-        if fileType.conforms(to: .image) {
-            if let image = NSImage(contentsOf: url) {
-                preview = FilePreview(fileName: fileName, image: image, text: nil, fileType: fileType)
+            var preview: FilePreview?
+
+            // Handle images
+            if fileType.conforms(to: .image) {
+                if let image = NSImage(contentsOf: url) {
+                    preview = FilePreview(fileName: fileName, image: image, text: nil, fileType: fileType)
+                }
+            }
+            // Handle PDFs
+            else if fileType.conforms(to: .pdf) {
+                if let pdfDocument = PDFDocument(url: url),
+                   let firstPage = pdfDocument.page(at: 0) {
+                    let thumbnail = firstPage.thumbnail(of: NSSize(width: 300, height: 300), for: .mediaBox)
+                    preview = FilePreview(fileName: fileName, image: thumbnail, text: nil, fileType: fileType)
+                }
+            }
+            // Handle text files
+            else if fileType.conforms(to: .text) || fileType.conforms(to: .sourceCode) {
+                if let text = try? String(contentsOf: url, encoding: .utf8) {
+                    let truncatedText = String(text.prefix(500))
+                    preview = FilePreview(fileName: fileName, image: nil, text: truncatedText, fileType: fileType)
+                }
+            }
+            // Handle JSON
+            else if fileType.conforms(to: .json) {
+                if let data = try? Data(contentsOf: url),
+                   let json = try? JSONSerialization.jsonObject(with: data),
+                   let prettyData = try? JSONSerialization.data(withJSONObject: json, options: .prettyPrinted),
+                   let prettyString = String(data: prettyData, encoding: .utf8) {
+                    let truncated = String(prettyString.prefix(500))
+                    preview = FilePreview(fileName: fileName, image: nil, text: truncated, fileType: fileType)
+                }
+            }
+
+            // Cache the preview on main thread
+            if let preview = preview {
+                DispatchQueue.main.async {
+                    self.previews[path] = preview
+                }
             }
         }
-        // Handle PDFs
-        else if fileType.conforms(to: .pdf) {
-            if let pdfDocument = PDFDocument(url: url),
-               let firstPage = pdfDocument.page(at: 0) {
-                let thumbnail = firstPage.thumbnail(of: NSSize(width: 300, height: 300), for: .mediaBox)
-                preview = FilePreview(fileName: fileName, image: thumbnail, text: nil, fileType: fileType)
-            }
-        }
-        // Handle text files
-        else if fileType.conforms(to: .text) || fileType.conforms(to: .sourceCode) {
-            if let text = try? String(contentsOf: url, encoding: .utf8) {
-                let truncatedText = String(text.prefix(500))
-                preview = FilePreview(fileName: fileName, image: nil, text: truncatedText, fileType: fileType)
-            }
-        }
-        // Handle JSON
-        else if fileType.conforms(to: .json) {
-            if let data = try? Data(contentsOf: url),
-               let json = try? JSONSerialization.jsonObject(with: data),
-               let prettyData = try? JSONSerialization.data(withJSONObject: json, options: .prettyPrinted),
-               let prettyString = String(data: prettyData, encoding: .utf8) {
-                let truncated = String(prettyString.prefix(500))
-                preview = FilePreview(fileName: fileName, image: nil, text: truncated, fileType: fileType)
-            }
-        }
 
-        // Cache the preview
-        if let preview = preview {
-            previews[path] = preview
-        }
-
-        return preview
+        return nil
     }
 
     func clearCache() {
-        previews.removeAll()
+        DispatchQueue.main.async { [weak self] in
+            self?.previews.removeAll()
+        }
     }
 
     func removePreview(for path: String) {
-        previews.removeValue(forKey: path)
+        DispatchQueue.main.async { [weak self] in
+            self?.previews.removeValue(forKey: path)
+        }
     }
 }
 
