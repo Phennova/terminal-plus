@@ -124,6 +124,9 @@ class TerminalNSView: NSView {
     private var lastCols: Int = 0
     private var lastRows: Int = 0
 
+    // Use flipped coordinate system (top-left origin)
+    override var isFlipped: Bool { true }
+
     private var charWidth: CGFloat {
         fontSize * 0.6
     }
@@ -196,43 +199,47 @@ class TerminalNSView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
 
-        guard let terminalEmulator = terminalEmulator,
-              let context = NSGraphicsContext.current?.cgContext else { return }
+        guard let terminalEmulator = terminalEmulator else { return }
+
+        // Fill background
+        terminalEmulator.colorScheme.background.setFill()
+        dirtyRect.fill()
+
+        guard let context = NSGraphicsContext.current?.cgContext else { return }
 
         let font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
 
-        // Draw terminal content from bottom to top (fix coordinate system)
+        // Draw terminal content (now with flipped coordinates, top to bottom is natural)
         for (lineIndex, line) in terminalEmulator.buffer.enumerated() {
-            // Calculate Y position from bottom
-            let yPosition = CGFloat(terminalEmulator.buffer.count - lineIndex - 1) * lineHeight
+            let yPosition = CGFloat(lineIndex) * lineHeight
 
             for (colIndex, cell) in line.enumerated() {
                 let xPosition = CGFloat(colIndex) * charWidth
                 let rect = NSRect(x: xPosition, y: yPosition, width: charWidth, height: lineHeight)
 
-                // Draw background
+                // Draw cell background
                 if let bgColor = cell.backgroundColor {
                     context.setFillColor(bgColor.cgColor)
                     context.fill(rect)
                 }
 
-                // Draw character
-                let attributes: [NSAttributedString.Key: Any] = [
-                    .font: font,
-                    .foregroundColor: cell.foregroundColor ?? terminalEmulator.colorScheme.foreground
-                ]
+                // Draw character (skip spaces for performance)
+                if cell.character != " " {
+                    let attributes: [NSAttributedString.Key: Any] = [
+                        .font: font,
+                        .foregroundColor: cell.foregroundColor ?? terminalEmulator.colorScheme.foreground
+                    ]
 
-                let attributedString = NSAttributedString(string: String(cell.character), attributes: attributes)
-
-                // Draw text with proper baseline
-                attributedString.draw(at: NSPoint(x: xPosition, y: yPosition + 2))
+                    let attributedString = NSAttributedString(string: String(cell.character), attributes: attributes)
+                    attributedString.draw(at: NSPoint(x: xPosition, y: yPosition))
+                }
             }
         }
 
         // Draw cursor
         if terminalEmulator.cursorVisible && cursorBlink {
             let cursorX = CGFloat(terminalEmulator.cursorX) * charWidth
-            let cursorY = CGFloat(terminalEmulator.buffer.count - terminalEmulator.cursorY - 1) * lineHeight
+            let cursorY = CGFloat(terminalEmulator.cursorY) * lineHeight
             let cursorRect = NSRect(x: cursorX, y: cursorY, width: charWidth, height: lineHeight)
 
             context.setFillColor(terminalEmulator.colorScheme.cursor.cgColor)

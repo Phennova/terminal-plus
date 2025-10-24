@@ -8,6 +8,8 @@ struct ContentView: View {
     @EnvironmentObject var timeTravelDebugger: TimeTravelDebugger
     @State private var showCommandPalette = false
     @State private var showHelp = false
+    @State private var selectedTab = 0
+    @State private var tabs: [TerminalTab] = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -21,11 +23,18 @@ struct ContentView: View {
                 showHelp: $showHelp
             )
 
+            // Tab Bar
+            TabBar(tabs: $tabs, selectedTab: $selectedTab)
+
             // Main content
             ZStack {
-                // Main terminal view with split panes
-                SplitPaneView()
-                    .environmentObject(splitPaneManager)
+                // Terminal view
+                GeometryReader { geometry in
+                    if tabs.indices.contains(selectedTab) {
+                        TerminalView(paneId: tabs[selectedTab].id)
+                            .frame(width: geometry.size.width, height: geometry.size.height)
+                    }
+                }
 
                 // Overlays
                 if showCommandPalette {
@@ -63,10 +72,112 @@ struct ContentView: View {
                 }
             }
         }
+        .onAppear {
+            if tabs.isEmpty {
+                addNewTab()
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .showCommandPalette)) { _ in
             withAnimation {
                 showCommandPalette.toggle()
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("NewTerminalTab"))) { _ in
+            addNewTab()
+        }
+    }
+
+    private func addNewTab() {
+        let newTab = TerminalTab(title: "Terminal \(tabs.count + 1)")
+        tabs.append(newTab)
+        selectedTab = tabs.count - 1
+    }
+}
+
+struct TerminalTab: Identifiable {
+    let id = UUID()
+    var title: String
+}
+
+struct TabBar: View {
+    @Binding var tabs: [TerminalTab]
+    @Binding var selectedTab: Int
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(Array(tabs.enumerated()), id: \.element.id) { index, tab in
+                TabButton(
+                    title: tab.title,
+                    isSelected: index == selectedTab,
+                    onSelect: {
+                        selectedTab = index
+                    },
+                    onClose: {
+                        if tabs.count > 1 {
+                            tabs.remove(at: index)
+                            if selectedTab >= tabs.count {
+                                selectedTab = tabs.count - 1
+                            }
+                        }
+                    }
+                )
+            }
+
+            Button(action: {
+                NotificationCenter.default.post(name: NSNotification.Name("NewTerminalTab"), object: nil)
+            }) {
+                Image(systemName: "plus")
+                    .font(.system(size: 12))
+                    .foregroundColor(.white)
+                    .frame(width: 30, height: 32)
+            }
+            .buttonStyle(.plain)
+
+            Spacer()
+        }
+        .background(Color(white: 0.1))
+        .overlay(
+            Rectangle()
+                .frame(height: 1)
+                .foregroundColor(Color.gray.opacity(0.3)),
+            alignment: .bottom
+        )
+    }
+}
+
+struct TabButton: View {
+    let title: String
+    let isSelected: Bool
+    let onSelect: () -> Void
+    let onClose: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .font(.system(size: 12))
+                .foregroundColor(.white)
+
+            if isHovered {
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10))
+                        .foregroundColor(.white.opacity(0.7))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(isSelected ? Color.white.opacity(0.15) : Color.clear)
+        )
+        .onHover { hovering in
+            isHovered = hovering
+        }
+        .onTapGesture {
+            onSelect()
         }
     }
 }
@@ -206,8 +317,6 @@ struct HelpView: View {
                     VStack(alignment: .leading, spacing: 20) {
                         ShortcutSection(title: "Terminal") {
                             ShortcutRow(key: "⌘T", description: "New terminal tab")
-                            ShortcutRow(key: "⌘D", description: "Split pane vertically")
-                            ShortcutRow(key: "⌘⇧D", description: "Split pane horizontally")
                             ShortcutRow(key: "⌘K", description: "Clear terminal")
                         }
 
@@ -222,8 +331,6 @@ struct HelpView: View {
                         ShortcutSection(title: "Smart Features") {
                             VStack(alignment: .leading, spacing: 8) {
                                 Text("• Type 'j <directory>' for smart directory jumping")
-                                    .font(.system(size: 12))
-                                Text("• Hover over file paths to see previews")
                                     .font(.system(size: 12))
                                 Text("• Git status shown in status bar automatically")
                                     .font(.system(size: 12))
@@ -287,36 +394,6 @@ struct ShortcutRow: View {
                 .foregroundColor(.secondary)
 
             Spacer()
-        }
-    }
-}
-
-struct SplitPaneView: View {
-    @EnvironmentObject var splitPaneManager: SplitPaneManager
-
-    var body: some View {
-        GeometryReader { geometry in
-            HStack(spacing: 0) {
-                ForEach(splitPaneManager.panes) { pane in
-                    VStack(spacing: 0) {
-                        ForEach(pane.subPanes) { subPane in
-                            TerminalView(paneId: subPane.id)
-                                .frame(height: subPane.height)
-
-                            if subPane.id != pane.subPanes.last?.id {
-                                Divider()
-                                    .background(Color.gray.opacity(0.3))
-                            }
-                        }
-                    }
-                    .frame(width: pane.width)
-
-                    if pane.id != splitPaneManager.panes.last?.id {
-                        Divider()
-                            .background(Color.gray.opacity(0.3))
-                    }
-                }
-            }
         }
     }
 }
