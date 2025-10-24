@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import SwiftUI
 
 struct TerminalCell {
     var character: Character
